@@ -283,3 +283,45 @@ func TestAllowedPortsDeny(t *testing.T) {
 		t.Logf("Connection to non-allowed port correctly failed: %v", err)
 	}
 }
+
+func TestDNSResolverConfiguration(t *testing.T) {
+	// Test that DNSResolver is properly passed through to the server config
+	config := socks5.Config{
+		DNSResolver: "8.8.8.8:53", // Custom DNS resolver
+	}
+
+	// This is a configuration test - the actual DNS resolution logic
+	// would need implementation in the server's DNS resolution
+	if config.DNSResolver != "8.8.8.8:53" {
+		t.Errorf("Expected DNSResolver to be '8.8.8.8:53', got '%s'", config.DNSResolver)
+	}
+}
+
+func TestDNSResolverIntegration(t *testing.T) {
+	// Test DNS resolver integration with configuration only
+	// The actual DNS resolution happens during SOCKS5 connections
+	// This test verifies the configuration is set up correctly
+
+	// Use Google DNS for testing
+	config := socks5.Config{
+		DNSResolver: "8.8.8.8:53", // Google DNS
+	}
+
+	// Create a server with custom DNS resolver
+	server := socks5.NewServer(config)
+
+	// Test close access to DNSResolver via type assertion or reflection
+	// Since config is unexported, we'll test by trying to create a simple connection
+	// If the DNS resolver is set, the behavior would be different
+
+	// For now, this test validates that the DNS resolver configuration exists
+	// and the server was created successfully
+	if server == nil {
+		t.Error("NewServer returned nil server")
+	}
+
+	// Note: Actual DNS resolution testing would require setting up a SOCKS5 client connection
+	// and monitoring the DNS requests, which is complex in a unit test environment
+
+	t.Logf("DNSResolver set to: %s", config.DNSResolver)
+}

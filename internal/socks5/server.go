@@ -145,6 +145,7 @@ type Config struct {
 	AllowedIPs      []string // List of allowed client IPs (CIDR notation)
 	BlockedIPs      []string // List of blocked client IPs (CIDR notation)
 	AllowedPorts    []int    // List of allowed destination ports (0 = allow all)
+	DNSResolver     string   // Custom DNS resolver address (ip:port format)
 }
 
 // Server represents a SOCKS5 proxy server
@@ -153,6 +154,7 @@ type Server struct {
 	connections  int64        // Current active connection count
 	maxConnMutex sync.RWMutex // Protects connections counter
 	connLimit    int64        // Maximum allowed connections (0 = unlimited)
+	dialer       *net.Dialer  // Custom dialer with DNS resolver
 }
 
 // NewServer creates a new SOCKS5 server instance
@@ -429,8 +431,31 @@ func (s *Server) handleRequest(ctx context.Context, conn net.Conn) error {
 }
 
 func (s *Server) handleConnect(ctx context.Context, conn net.Conn, destAddr string, destPort int) error {
+	var targetAddr string
+
+	// Check if we have a domain name that needs DNS resolution
+	if net.ParseIP(destAddr) == nil {
+		// This is a domain name, resolve it
+		if s.config.DNSResolver != "" {
+			// Use custom DNS resolver
+			ip, err := s.resolveDomain(destAddr)
+			if err != nil {
+				slog.Warn("DNS resolution failed", "domain", destAddr, "error", err)
+				return s.sendReplyError(conn, ErrHostUnreachable)
+			}
+			targetAddr = fmt.Sprintf("%s:%d", ip.String(), destPort)
+			slog.Debug("Resolved domain using custom DNS", "domain", destAddr, "ip", ip.String(), "resolver", s.config.DNSResolver)
+		} else {
+			// Use default system DNS resolution (original behavior)
+			targetAddr = fmt.Sprintf("%s:%d", destAddr, destPort)
+		}
+	} else {
+		// This is already an IP address
+		targetAddr = fmt.Sprintf("%s:%d", destAddr, destPort)
+	}
+
 	// Establish connection to destination
-	destConn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", destAddr, destPort), 30*time.Second)
+	destConn, err := net.DialTimeout("tcp", targetAddr, 30*time.Second)
 	if err != nil {
 		var replyCode byte
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -554,6 +579,44 @@ func (s *Server) isPortAllowed(port int) bool {
 
 	slog.Debug("Port denied", "port", port, "allowed_ports", s.config.AllowedPorts)
 	return false
+}
+
+// resolveDomain resolves a domain name using the custom DNS resolver
+func (s *Server) resolveDomain(domain string) (net.IP, error) {
+	// For now, implement a simple DNS resolver using UDP
+	// This is a basic implementation - in production you might want to use a more robust DNS library
+
+	resolver := &net.Resolver{
+		PreferGo: true, // Use pure Go resolver
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 5 * time.Second}
+			return d.DialContext(ctx, "udp", s.config.DNSResolver)
+		},
+	}
+
+	// Resolve the domain
+	ips, err := resolver.LookupIPAddr(context.Background(), domain)
+	if err != nil {
+		return nil, fmt.Errorf("DNS resolution failed: %w", err)
+	}
+
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no IP addresses found for domain: %s", domain)
+	}
+
+	// Return the first IPv4 address of the results
+	for _, ip := range ips {
+		if ip.IP.To4() != nil {
+			return ip.IP, nil
+		}
+	}
+
+	// If no IPv4 addresses found, return the first IPv6 (if available)
+	if len(ips) > 0 {
+		return ips[0].IP, nil
+	}
+
+	return nil, fmt.Errorf("no suitable IP addresses found for domain: %s", domain)
 }
 
 // isClientAllowed checks if the given network address (IP:port) is allowed based on both BlockedIPs and AllowedIPs configuration

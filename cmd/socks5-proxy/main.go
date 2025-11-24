@@ -103,6 +103,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 		AllowedIPs:      cfg.AllowedIPs,
 		BlockedIPs:      cfg.BlockedIPs,
 		AllowedPorts:    cfg.AllowedPorts,
+		DNSResolver:     cfg.DNSResolver,
 	})
 
 	sigChan := make(chan os.Signal, 1)
