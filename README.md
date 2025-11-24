@@ -4,14 +4,14 @@ A high-performance SOCKS5 proxy server implementation in Go that follows best pr
 
 ## Features
 
-- **SOCKS5 Protocol Compliance**: Full implementation of RFC 1928
-- **No Authentication**: Supports no-authentication method (0x00)
+- **SOCKS5 Protocol Compliance**: Full implementation of RFC 1928 and RFC 1929
+- **Authentication**: Supports no-authentication (0x00) and username/password (0x02) methods
 - **IPv4, IPv6, and Domain Name Resolution**: Handles all SOCKS5 address types
 - **CONNECT Command Support**: Establishes TCP connections to target hosts
 - **Concurrent Connections**: Uses goroutines for handling multiple clients simultaneously
 - **Graceful Shutdown**: Proper cleanup and context-based cancellation
 - **Comprehensive Logging**: Structured logging for monitoring and debugging
-- **Configurable**: Command-line flags for customization
+- **Configurable**: Command-line flags for customization and authentication
 
 ## Requirements
 
@@ -40,6 +40,10 @@ go build -o socks5-proxy
 ### Command Line Options
 
 - `-addr`: Address to listen on (default ":1080")
+- `-username`: Username for authentication (optional)
+- `-password`: Password for authentication (optional)
+
+When both username and password are provided, the server will require username/password authentication (RFC 1929). When neither is provided, the server operates in no-authentication mode.
 
 ## Protocol Implementation
 
@@ -76,7 +80,9 @@ The server accepts configuration via command-line flags:
 
 ```go
 type Config struct {
-    Addr string // Listen address (host:port)
+    Addr     string // Listen address (host:port)
+    Username string // Username for authentication (optional)
+    Password string // Password for authentication (optional)
 }
 ```
 
@@ -128,23 +134,23 @@ Most applications that support SOCKS5 proxies can be configured to use this serv
 
 ## Security
 
-Currently supports no-authentication method only. For production use, consider:
+The server supports both no-authentication and username/password authentication methods. For production use:
 
-- Implementing username/password authentication
-- Adding TLS encryption
-- Rate limiting
+- **Authentication**: Use the `-username` and `-password` flags to enable authentication
+- **TLS encryption**: Consider adding TLS support for encrypted connections
+- **Rate limiting**: Implement connection rate limiting
 - Access control lists
 
 ## Future Enhancements
 
 Planned features (not yet implemented):
 
-- User/Password authentication (RFC 1929)
 - UDP ASSOCIATE command support
 - BIND command support
 - Configuration files
 - Metrics and monitoring
 - TLS support
+- Advanced authentication methods
 
 ## Contributing
 

@@ -13,10 +13,19 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":1080", "address to listen on")
+	username := flag.String("username", "", "username for authentication (optional)")
+	password := flag.String("password", "", "password for authentication (optional)")
 	flag.Parse()
 
+	// Validate that both username and password are provided together
+	if (*username != "" && *password == "") || (*username == "" && *password != "") {
+		log.Fatal("Both username and password must be provided together, or neither for no authentication")
+	}
+
 	config := socks5.Config{
-		Addr: *addr,
+		Addr:     *addr,
+		Username: *username,
+		Password: *password,
 	}
 
 	server := socks5.NewServer(config)

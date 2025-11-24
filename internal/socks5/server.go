@@ -21,6 +21,11 @@ const (
 	bindCommand         = 2
 	udpAssociateCommand = 3
 
+	// SOCKS5 Authentication Methods
+	noAuthRequired      = 0
+	userPassAuth        = 2
+	noAcceptableMethods = 0xFF
+
 	// SOCKS5 Address Types
 	ipv4Address   = 1
 	domainAddress = 3
@@ -36,11 +41,17 @@ const (
 	replyTTLExpired              = 6
 	replyCommandNotSupported     = 7
 	replyAddressTypeNotSupported = 8
+
+	// Username/Password Authentication Codes
+	authSuccess = 0
+	authFailure = 1
 )
 
 // Config holds the server configuration
 type Config struct {
-	Addr string
+	Addr     string
+	Username string
+	Password string
 }
 
 // Server represents a SOCKS5 proxy server
@@ -136,30 +147,111 @@ func (s *Server) negotiate(conn net.Conn) error {
 		return fmt.Errorf("failed to read methods: %w", err)
 	}
 
-	// Find no authentication method (0x00)
-	var selectedMethod byte = 0xFF
-	for _, method := range methods {
-		if method == 0x00 { // No authentication
-			selectedMethod = 0x00
-			break
-		}
+	// Select authentication method
+	selectedMethod := s.selectAuthMethod(methods)
+	if selectedMethod == noAcceptableMethods {
+		return errors.New("no acceptable authentication methods")
 	}
 
-	if selectedMethod == 0xFF {
-		selectedMethod = 0xFF // No acceptable methods
-	}
-
-	// Send response
+	// Send method selection response
 	response := []byte{socksVersion, selectedMethod}
 	if _, err := conn.Write(response); err != nil {
 		return fmt.Errorf("failed to send method selection: %w", err)
 	}
 
-	if selectedMethod == 0xFF {
-		return errors.New("no acceptable authentication methods")
+	// If username/password authentication was selected, perform authentication
+	if selectedMethod == userPassAuth {
+		if err := s.authenticate(conn); err != nil {
+			return fmt.Errorf("authentication failed: %w", err)
+		}
 	}
 
 	return nil
+}
+
+// selectAuthMethod chooses the best authentication method from the client's offered methods
+func (s *Server) selectAuthMethod(methods []byte) byte {
+	// Check if authentication is required
+	authRequired := s.config.Username != "" && s.config.Password != ""
+
+	// If auth is required, look for username/password method (0x02)
+	if authRequired {
+		for _, method := range methods {
+			if method == userPassAuth {
+				return userPassAuth
+			}
+		}
+	}
+
+	// Otherwise, prefer no authentication (0x00)
+	for _, method := range methods {
+		if method == noAuthRequired {
+			return noAuthRequired
+		}
+	}
+
+	// No acceptable method found
+	return noAcceptableMethods
+}
+
+// authenticate handles username/password authentication according to RFC 1929
+func (s *Server) authenticate(conn net.Conn) error {
+	// Username/password authentication sub-negotiation
+
+	// Read auth version (should be 0x01 for username/password auth)
+	authVersion := make([]byte, 1)
+	if _, err := io.ReadFull(conn, authVersion); err != nil {
+		return fmt.Errorf("failed to read auth version: %w", err)
+	}
+
+	if authVersion[0] != 0x01 {
+		// Send failure response
+		response := []byte{0x01, authFailure}
+		conn.Write(response)
+		return errors.New("unsupported auth version")
+	}
+
+	// Read username length
+	userLenBuf := make([]byte, 1)
+	if _, err := io.ReadFull(conn, userLenBuf); err != nil {
+		return fmt.Errorf("failed to read username length: %w", err)
+	}
+	userLen := userLenBuf[0]
+
+	// Read username
+	username := make([]byte, userLen)
+	if _, err := io.ReadFull(conn, username); err != nil {
+		return fmt.Errorf("failed to read username: %w", err)
+	}
+
+	// Read password length
+	passLenBuf := make([]byte, 1)
+	if _, err := io.ReadFull(conn, passLenBuf); err != nil {
+		return fmt.Errorf("failed to read password length: %w", err)
+	}
+	passLen := passLenBuf[0]
+
+	// Read password
+	password := make([]byte, passLen)
+	if _, err := io.ReadFull(conn, password); err != nil {
+		return fmt.Errorf("failed to read password: %w", err)
+	}
+
+	// Authenticate
+	if string(username) == s.config.Username && string(password) == s.config.Password {
+		// Send success response
+		response := []byte{0x01, authSuccess}
+		if _, err := conn.Write(response); err != nil {
+			return fmt.Errorf("failed to send auth success: %w", err)
+		}
+		s.logger.Printf("Authentication successful for user: %s", string(username))
+		return nil
+	} else {
+		// Send failure response
+		response := []byte{0x01, authFailure}
+		conn.Write(response)
+		return errors.New("authentication failed: invalid credentials")
+	}
 }
 
 func (s *Server) handleRequest(ctx context.Context, conn net.Conn) error {
