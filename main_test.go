@@ -52,7 +52,7 @@ func setupProxy(t *testing.T, config socks5.Config) (string, context.CancelFunc,
 	proxyAddr := proxyListener.Addr().String()
 	proxyListener.Close()
 
-	ctxProxy, cancelProxy := context.WithCancel(t.Context())
+	ctxProxy, cancelProxy := context.WithCancel(context.Background())
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -63,7 +63,7 @@ func setupProxy(t *testing.T, config socks5.Config) (string, context.CancelFunc,
 		defer wg.Done()
 		server := socks5.NewServer(config)
 
-		ctx, cancel := context.WithTimeout(ctxProxy, 5*time.Second)
+		ctx, cancel := context.WithTimeout(ctxProxy, 10*time.Second)
 		defer cancel()
 
 		if err := server.ListenAndServe(ctx); err != context.Canceled && err != nil {
@@ -119,6 +119,34 @@ func TestSOCKS5ProxyIntegration(t *testing.T) {
 
 	// Run integration test
 	runIntegrationTest(t, proxyAddr, testAddr, nil, "test")
+	cancelProxy()
+	wg.Wait()
+}
+
+// TestUnauthenticatedConnectionRejected tests that when auth is required,
+// clients that don't provide authentication are rejected
+func TestUnauthenticatedConnectionRejected(t *testing.T) {
+	// Setup test server
+	testServer, cleanup := setupTestServer(t)
+	defer cleanup()
+	testAddr := testServer.Addr().String()
+
+	// Setup proxy without authentication
+	config := socks5.Config{
+		Username: "testuser",
+		Password: "testpass",
+	}
+	proxyAddr, cancelProxy, wg := setupProxy(t, config)
+
+	// Run integration test
+	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, nil, proxy.Direct)
+	if err != nil {
+		t.Fatalf("Failed to create SOCKS5 dialer: %v", err)
+	}
+
+	if _, err := socksDialer.Dial("tcp", testAddr); err == nil {
+		t.Fatalf("Auth is not working.")
+	}
 	cancelProxy()
 	wg.Wait()
 }

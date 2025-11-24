@@ -171,27 +171,28 @@ func (s *Server) negotiate(conn net.Conn) error {
 
 // selectAuthMethod chooses the best authentication method from the client's offered methods
 func (s *Server) selectAuthMethod(methods []byte) byte {
-	// Check if authentication is required
+	// Check if authentication is required (username and password are configured)
 	authRequired := s.config.Username != "" && s.config.Password != ""
 
-	// If auth is required, look for username/password method (0x02)
 	if authRequired {
+		// When authentication is required, ONLY allow username/password auth
 		for _, method := range methods {
 			if method == userPassAuth {
 				return userPassAuth
 			}
 		}
-	}
-
-	// Otherwise, prefer no authentication (0x00)
-	for _, method := range methods {
-		if method == noAuthRequired {
-			return noAuthRequired
+		// If username/password auth method not offered by client, reject connection
+		return noAcceptableMethods
+	} else {
+		// When no authentication is configured, prefer no authentication (0x00)
+		for _, method := range methods {
+			if method == noAuthRequired {
+				return noAuthRequired
+			}
 		}
+		// If no-auth method not offered, reject connection
+		return noAcceptableMethods
 	}
-
-	// No acceptable method found
-	return noAcceptableMethods
 }
 
 // authenticate handles username/password authentication according to RFC 1929
