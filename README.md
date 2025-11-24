@@ -26,24 +26,56 @@ go build -o socks5-proxy
 
 ## Usage
 
+The proxy server uses the modern Cobra CLI framework for powerful command-line parsing.
+
 ```bash
 # Run on default port 1080
 ./socks5-proxy
 
 # Run on custom port
-./socks5-proxy -addr=:8080
+./socks5-proxy --addr=:8080
+
+# Run with authentication
+./socks5-proxy --username=myuser --password=mypass
 
 # Show help
-./socks5-proxy -h
+./socks5-proxy --help
 ```
 
 ### Command Line Options
 
-- `-addr`: Address to listen on (default ":1080")
-- `-username`: Username for authentication (optional)
-- `-password`: Password for authentication (optional)
+- `--addr`: Address to listen on (default ":1080")
+- `--username`: Username for authentication (optional)
+- `--password`: Password for authentication (optional)
 
-When both username and password are provided, the server will require username/password authentication (RFC 1929). When neither is provided, the server operates in no-authentication mode.
+**Authentication Requirements:** Both username and password must be provided together, or neither for no-authentication mode.
+
+### Help Output
+
+```bash
+$ ./socks5-proxy --help
+
+A SOCKS5 proxy server written in Go that supports username/password authentication.
+Complete documentation is available at https://github.com/techmagister/socks5proxy
+
+Usage:
+  socks5-proxy [flags]
+
+Flags:
+      --addr string       address to listen on (default ":1080")
+  -h, --help              help for socks5-proxy
+      --password string   password for authentication (optional)
+      --username string   username for authentication (optional)
+```
+
+### Error Handling
+
+The CLI provides clear error messages for invalid configurations:
+
+```bash
+$ ./socks5-proxy --username=test
+Error: both username and password must be provided together, or neither for no authentication
+```
 
 ## Protocol Implementation
 
