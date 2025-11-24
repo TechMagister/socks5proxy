@@ -130,3 +130,96 @@ func TestAllowedIPsDeny(t *testing.T) {
 		conn1.Close()
 	}
 }
+
+func TestBlockedIPs(t *testing.T) {
+	// Test that blocked IPs are denied
+	testServer, cleanup := setupTestServer(t)
+	defer cleanup()
+	testAddr := testServer.Addr().String()
+
+	// Setup proxy with BlockedIPs that includes localhost
+	config := socks5.Config{
+		BlockedIPs: []string{"127.0.0.1/32"}, // Block localhost exactly
+	}
+	proxyAddr, cancelProxy, wg := setupProxy(t, config)
+	defer wg.Wait()
+	defer cancelProxy()
+
+	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, nil, proxy.Direct)
+	if err != nil {
+		t.Fatalf("Failed to create SOCKS5 dialer: %v", err)
+	}
+
+	// Connection from 127.0.0.1 should be blocked
+	conn1, err1 := socksDialer.Dial("tcp", testAddr)
+	if err1 == nil {
+		t.Errorf("Connection from blocked IP (127.0.0.1) should fail")
+		conn1.Close()
+	}
+}
+
+func TestBlockedIPsCIDR(t *testing.T) {
+	// Test CIDR blocking functionality
+	testServer, cleanup := setupTestServer(t)
+	defer cleanup()
+	testAddr := testServer.Addr().String()
+
+	// Setup proxy with BlockedIPs using CIDR notation
+	config := socks5.Config{
+		BlockedIPs: []string{"127.0.0.0/8"}, // Block entire 127.x.x.x range
+	}
+	proxyAddr, cancelProxy, wg := setupProxy(t, config)
+	defer wg.Wait()
+	defer cancelProxy()
+
+	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, nil, proxy.Direct)
+	if err != nil {
+		t.Fatalf("Failed to create SOCKS5 dialer: %v", err)
+	}
+
+	// Connection from 127.0.0.1 should be blocked by CIDR
+	conn1, err1 := socksDialer.Dial("tcp", testAddr)
+	if err1 == nil {
+		t.Errorf("Connection from IP in blocked CIDR (127.0.0.1 in 127.0.0.0/8) should fail")
+		conn1.Close()
+	}
+}
+
+func TestBlockedIPsPrecedence(t *testing.T) {
+	// Test that blocked IPs take precedence over allowed IPs
+	// (fail-safe approach: block wins if IP is in both lists)
+	testServer, cleanup := setupTestServer(t)
+	defer cleanup()
+	testAddr := testServer.Addr().String()
+
+	// Setup proxy that both allows and blocks 127.0.0.1 (block should win)
+	config := socks5.Config{
+		AllowedIPs: []string{"127.0.0.1/32"}, // Allow localhost
+		BlockedIPs: []string{"127.0.0.1/32"}, // But also block it
+	}
+	proxyAddr, cancelProxy, wg := setupProxy(t, config)
+	defer wg.Wait()
+	defer cancelProxy()
+
+	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, nil, proxy.Direct)
+	if err != nil {
+		t.Fatalf("Failed to create SOCKS5 dialer: %v", err)
+	}
+
+	// Connection should be blocked (blocked list takes precedence)
+	conn1, err1 := socksDialer.Dial("tcp", testAddr)
+	if err1 == nil {
+		t.Errorf("IP in both allowed and blocked lists should be blocked (fail-safe)")
+		conn1.Close()
+	}
+}
+
+func TestBlockedIPsAllowOthers(t *testing.T) {
+	// Test that blocking specific IPs still allows other IPs
+	t.Skip("This test needs external IPs to be properly testable in CI environment")
+
+	// This would test that blocking 127.0.0.1 still allows connections from other interfaces
+	// But requires multiple interface setup which isn't available in typical test environments
+
+	t.Log("BlockedIPs allow others test - implementation pending for multi-interface setup")
+}

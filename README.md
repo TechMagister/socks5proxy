@@ -8,10 +8,12 @@ A high-performance SOCKS5 proxy server implementation in Go that follows best pr
 - **Authentication**: Supports no-authentication (0x00) and username/password (0x02) methods
 - **IPv4, IPv6, and Domain Name Resolution**: Handles all SOCKS5 address types
 - **CONNECT Command Support**: Establishes TCP connections to target hosts
-- **Concurrent Connections**: Uses goroutines for handling multiple clients simultaneously
+- **Concurrent Connections**: Configurable connection limits to prevent resource exhaustion
+- **IP Filtering**: Advanced whitelist/blacklist filtering with CIDR support
 - **Graceful Shutdown**: Proper cleanup and context-based cancellation
 - **Comprehensive Logging**: Structured logging for monitoring and debugging
-- **Configurable**: Command-line flags for customization and authentication
+- **Enterprise Security**: Multi-layer protection (limits + IP filtering + auth)
+- **Configurable**: Multiple configuration sources with clear priority order
 
 ## Requirements
 
@@ -87,9 +89,10 @@ dns_resolver: "8.8.8.8:53"
   "password": "testpass",
   "log_level": "info",
   "log_format": "text",
-  "max_connections": 1000,
   "timeout": 30,
+  "connection_limit": 100,
   "allowed_ips": ["192.168.1.0/24", "10.0.0.0/8"],
+  "blocked_ips": ["192.168.1.100/32", "203.0.113.0/24"],
   "allowed_ports": [80, 443, 8080],
   "dns_resolver": "8.8.8.8:53"
 }
@@ -102,9 +105,10 @@ export SOCKS5_USERNAME="testuser"
 export SOCKS5_PASSWORD="testpass"
 export SOCKS5_LOG_LEVEL="info"
 export SOCKS5_LOG_FORMAT="text"
-export SOCKS5_MAX_CONNECTIONS="1000"
+export SOCKS5_CONNECTION_LIMIT="100"
 export SOCKS5_TIMEOUT="30"
 export SOCKS5_ALLOWED_IPS="192.168.1.0/24,10.0.0.0/8"
+export SOCKS5_BLOCKED_IPS="192.168.1.100/32,203.0.113.0/24"
 export SOCKS5_ALLOWED_PORTS="80,443,8080,8088-8090"
 export SOCKS5_DNS_RESOLVER="8.8.8.8:53"
 ```
@@ -337,12 +341,94 @@ slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 
 ## Security
 
-The server supports both no-authentication and username/password authentication methods. For production use:
+The SOCKS5 proxy implements **enterprise-grade security** with multi-layer protection:
 
-- **Authentication**: Use the `-username` and `-password` flags to enable authentication
-- **TLS encryption**: Consider adding TLS support for encrypted connections
-- **Rate limiting**: Implement connection rate limiting
-- Access control lists
+### Connection Limiting
+
+Control concurrent connections to prevent resource exhaustion:
+
+```yaml
+connection_limit: 100  # Maximum 100 simultaneous connections (0 = unlimited)
+```
+
+```bash
+export SOCKS5_CONNECTION_LIMIT=50
+```
+
+### IP Filtering
+
+Advanced whitelist/blacklist filtering with CIDR support:
+
+#### Allow-Only Mode (Whitelist)
+```yaml
+allowed_ips:
+  - "192.168.1.0/24"  # Allow private network
+  - "10.0.0.0/8"      # Allow internal IPs
+```
+All IPs not in the `allowed_ips` list are rejected.
+
+#### Block Mode (Blacklist)
+```yaml
+blocked_ips:
+  - "203.0.113.0/24"  # Block malicious subnet
+  - "192.168.1.100/32" # Block specific IP
+```
+Explicitly blocked IPs are rejected, others are allowed.
+
+#### Combined Security (Recommended)
+```yaml
+# Allow internal networks, block specific threats
+allowed_ips:
+  - "192.168.0.0/16"
+  - "10.0.0.0/8"
+blocked_ips:
+  - "192.168.1.100/32"  # Even if in allowed range, block wins
+  - "203.0.113.0/24"   # Block known malicious range
+```
+
+### Filtering Logic (Fail-Safe)
+
+The server uses **fail-safe precedence** to maximize security:
+
+```
+1. BLOCKED IPs (deny) ← Highest precedence
+2. ALLOWED IPs required (whitelist check)
+3. No filters (allow all) ← Lowest precedence
+```
+
+**Behavior Matrix:**
+| BlockedIPs | AllowedIPs | IP in both lists | Result |
+|------------|------------|------------------|---------|
+| ✅ Match | ❌ Empty | N/A | ❌ **Block** |
+| ❌ Empty | ✅ Match | N/A | ✅ Allow |
+| ❌ Empty | ❌ Empty | N/A | ✅ Allow |
+| ✅ Match | ✅ Match | ❌ Block wins | ❌ **Block** |
+
+### Authentication
+
+Username/password authentication (RFC 1929):
+
+```yaml
+username: "proxyuser"
+password: "securepass"
+```
+
+**Requirements:** Both fields must be set together or neither.
+
+### Future Enhancements
+
+- **TLS encryption**: Certificate-based secure connections
+- **Advanced rate limiting**: Request-based throttling
+- **Geo-blocking**: Country-based IP restrictions
+- **Time-based access**: Schedule-based access control
+
+### Production Recommendations
+
+1. **Always set `connection_limit`** to prevent DoS attacks
+2. **Use IP filtering** instead of relying on network firewalls alone
+3. **Combine whitelisting with blacklisting** for defense in depth
+4. **Enable authentication** for sensitive deployments
+5. **Monitor logs** for security events
 
 ## Future Enhancements
 

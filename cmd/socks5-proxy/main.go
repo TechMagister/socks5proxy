@@ -101,6 +101,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 		Password:        cfg.Password,
 		ConnectionLimit: cfg.ConnectionLimit,
 		AllowedIPs:      cfg.AllowedIPs,
+		BlockedIPs:      cfg.BlockedIPs,
 	})
 
 	sigChan := make(chan os.Signal, 1)
