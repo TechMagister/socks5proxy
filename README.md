@@ -50,6 +50,85 @@ The proxy server uses the modern Cobra CLI framework for powerful command-line p
 
 **Authentication Requirements:** Both username and password must be provided together, or neither for no-authentication mode.
 
+### Configuration Management
+
+The proxy supports multiple configuration sources with clear priority order:
+
+1. **Command-line flags** (highest priority - override everything else)
+2. **Configuration files** (--config flag - YAML or JSON format)
+3. **Environment variables** (lowest priority - defaults)
+
+#### Configuration Sources
+
+- **YAML Configuration:**
+```yaml
+addr: ":1080"
+username: "testuser"
+password: "testpass"
+log_level: "info"
+log_format: "text"
+max_connections: 1000
+timeout: 30
+allowed_ips:
+  - "192.168.1.0/24"
+  - "10.0.0.0/8"
+allowed_ports:
+  - 80
+  - 443
+  - 8080
+dns_resolver: "8.8.8.8:53"
+```
+
+- **JSON Configuration:**
+```json
+{
+  "addr": ":1080",
+  "username": "testuser",
+  "password": "testpass",
+  "log_level": "info",
+  "log_format": "text",
+  "max_connections": 1000,
+  "timeout": 30,
+  "allowed_ips": ["192.168.1.0/24", "10.0.0.0/8"],
+  "allowed_ports": [80, 443, 8080],
+  "dns_resolver": "8.8.8.8:53"
+}
+```
+
+- **Environment Variables:**
+```bash
+export SOCKS5_ADDR=":1080"
+export SOCKS5_USERNAME="testuser"
+export SOCKS5_PASSWORD="testpass"
+export SOCKS5_LOG_LEVEL="info"
+export SOCKS5_LOG_FORMAT="text"
+export SOCKS5_MAX_CONNECTIONS="1000"
+export SOCKS5_TIMEOUT="30"
+export SOCKS5_ALLOWED_IPS="192.168.1.0/24,10.0.0.0/8"
+export SOCKS5_ALLOWED_PORTS="80,443,8080,8088-8090"
+export SOCKS5_DNS_RESOLVER="8.8.8.8:53"
+```
+
+#### Commands
+
+- **Generate config file:**
+```bash
+./socks5-proxy gen-config          # Generate config.yaml
+./socks5-proxy gen-config myconfig.json  # Generate JSON config
+```
+
+- **Using config file:**
+```bash
+./socks5-proxy --config config.yaml
+./socks5-proxy --config config.json
+```
+
+#### Configuration Priority
+
+1. Command-line flags override config file and environment variables
+2. Config file overrides environment variables
+3. Environment variables provide defaults
+
 ### Help Output
 
 ```bash
@@ -271,10 +350,11 @@ Planned features (not yet implemented):
 
 - UDP ASSOCIATE command support
 - BIND command support
-- Configuration files
 - Metrics and monitoring
 - TLS support
 - Advanced authentication methods
+- Access control lists
+- Rate limiting
 
 ## Contributing
 
