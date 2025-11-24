@@ -6,9 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
-	"os"
 	"sync"
 	"time"
 )
@@ -57,14 +56,12 @@ type Config struct {
 // Server represents a SOCKS5 proxy server
 type Server struct {
 	config Config
-	logger *log.Logger
 }
 
 // NewServer creates a new SOCKS5 server instance
 func NewServer(config Config) *Server {
 	return &Server{
 		config: config,
-		logger: log.New(os.Stderr, "[SOCKS5] ", log.LstdFlags),
 	}
 }
 
@@ -76,11 +73,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 	defer listener.Close()
 
-	s.logger.Printf("SOCKS5 proxy listening on %s", s.config.Addr)
+	slog.Info("SOCKS5 proxy listening", "addr", s.config.Addr)
 
 	go func() {
 		<-ctx.Done()
-		s.logger.Println("Shutting down server...")
+		slog.Info("Shutting down server")
 		listener.Close()
 	}()
 
@@ -92,7 +89,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 			if ctx.Err() != nil {
 				break
 			}
-			s.logger.Printf("Failed to accept connection: %v", err)
+			slog.Error("Failed to accept connection", "error", err)
 			continue
 		}
 
@@ -110,15 +107,15 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 
-	s.logger.Printf("New connection from %s", conn.RemoteAddr())
+	slog.Debug("New connection", "remote_addr", conn.RemoteAddr().String())
 
 	if err := s.negotiate(conn); err != nil {
-		s.logger.Printf("Handshake failed: %v", err)
+		slog.Warn("Handshake failed", "error", err)
 		return
 	}
 
 	if err := s.handleRequest(ctx, conn); err != nil {
-		s.logger.Printf("Request handling failed: %v", err)
+		slog.Warn("Request handling failed", "error", err)
 		return
 	}
 }
@@ -150,6 +147,7 @@ func (s *Server) negotiate(conn net.Conn) error {
 	// Select authentication method
 	selectedMethod := s.selectAuthMethod(methods)
 	if selectedMethod == noAcceptableMethods {
+		slog.Warn("No acceptable authentication methods")
 		return errors.New("no acceptable authentication methods")
 	}
 
@@ -162,6 +160,7 @@ func (s *Server) negotiate(conn net.Conn) error {
 	// If username/password authentication was selected, perform authentication
 	if selectedMethod == userPassAuth {
 		if err := s.authenticate(conn); err != nil {
+			slog.Warn("Authentication failed", "error", err)
 			return fmt.Errorf("authentication failed: %w", err)
 		}
 	}
@@ -245,7 +244,7 @@ func (s *Server) authenticate(conn net.Conn) error {
 		if _, err := conn.Write(response); err != nil {
 			return fmt.Errorf("failed to send auth success: %w", err)
 		}
-		s.logger.Printf("Authentication successful for user: %s", string(username))
+		slog.Info("Authentication successful", "user", string(username))
 		return nil
 	} else {
 		// Send failure response
@@ -310,7 +309,9 @@ func (s *Server) handleConnect(ctx context.Context, conn net.Conn, destAddr stri
 		return fmt.Errorf("failed to send success reply: %w", err)
 	}
 
-	s.logger.Printf("Connected %s -> %s:%d", conn.RemoteAddr(), destAddr, destPort)
+	slog.Info("Connected",
+		"client", conn.RemoteAddr().String(),
+		"destination", fmt.Sprintf("%s:%d", destAddr, destPort))
 
 	// Start forwarding data
 	return s.forward(ctx, conn, destConn)

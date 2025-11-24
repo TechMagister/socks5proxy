@@ -125,6 +125,45 @@ Configure your browser to use SOCKS5 proxy at `localhost:1080`.
 
 Most applications that support SOCKS5 proxies can be configured to use this server.
 
+## Logging
+
+The server uses the modern Go `slog` structured logging package (Go 1.21+) for comprehensive observability.
+
+### Log Levels
+
+- **INFO**: Server lifecycle events and successful connections
+- **WARN**: Authentication failures and protocol errors
+- **ERROR**: Connection acceptance errors
+
+### Structured Log Examples
+
+```bash
+# Server startup
+2025/11/24 14:47:56 INFO SOCKS5 proxy listening addr=127.0.0.1:45204
+
+# Successful connection
+2025/11/24 14:47:56 INFO Connected client=127.0.0.1:47089 destination=127.0.0.1:45114
+
+# Authentication
+2025/11/24 14:47:57 INFO Authentication successful user=testuser
+
+# Security violation
+2025/11/24 14:47:57 WARN No acceptable authentication methods
+```
+
+### Log Configuration
+
+By default, uses JSON format to stderr. Configure slog globally for different outputs:
+
+```go
+import "log/slog"
+
+// Text format with INFO level
+slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+    Level: slog.LevelInfo,
+})))
+```
+
 ## Performance Considerations
 
 - Uses efficient `io.Copy` for data forwarding
