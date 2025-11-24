@@ -21,7 +21,7 @@ A high-performance SOCKS5 proxy server implementation in Go that follows best pr
 ## Installation
 
 ```bash
-go build -o socks5-proxy
+go build -o socks5-proxy cmd/socks5-proxy/main.go
 ```
 
 ## Usage
