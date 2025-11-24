@@ -386,6 +386,37 @@ blocked_ips:
   - "203.0.113.0/24"   # Block known malicious range
 ```
 
+#### Destination Port Filtering
+
+Control which destination ports clients can connect through:
+
+```yaml
+# Allow only specific ports
+allowed_ports:
+  - 80     # HTTP
+  - 443    # HTTPS
+  - 22     # SSH
+  - 3306   # MySQL
+  - 5432   # PostgreSQL
+```
+
+```bash
+export SOCKS5_ALLOWED_PORTS="80,443,8080"
+```
+
+**Port Range Support (via configuration parsing):**
+```bash
+# Range syntax supported in environment variables
+export SOCKS5_ALLOWED_PORTS="80,443,8080-8090"
+# This expands to: [80, 443, 8080, 8081, ..., 8090]
+```
+
+**Security Use Cases:**
+- **Database Access Control:** Only allow ports 3306, 5432, etc.
+- **Web Traffic Only:** Restrict to ports 80, 443 only
+- **Corporate Networks:** Allow specific application ports
+- **Development Environments:** Block production ports
+
 ### Filtering Logic (Fail-Safe)
 
 The server uses **fail-safe precedence** to maximize security:
@@ -393,16 +424,17 @@ The server uses **fail-safe precedence** to maximize security:
 ```
 1. BLOCKED IPs (deny) ← Highest precedence
 2. ALLOWED IPs required (whitelist check)
-3. No filters (allow all) ← Lowest precedence
+3. ALLOWED PORTS required (whitelist check) ← New
+4. No filters (allow all) ← Lowest precedence
 ```
 
 **Behavior Matrix:**
-| BlockedIPs | AllowedIPs | IP in both lists | Result |
-|------------|------------|------------------|---------|
-| ✅ Match | ❌ Empty | N/A | ❌ **Block** |
-| ❌ Empty | ✅ Match | N/A | ✅ Allow |
-| ❌ Empty | ❌ Empty | N/A | ✅ Allow |
-| ✅ Match | ✅ Match | ❌ Block wins | ❌ **Block** |
+| BlockedIPs | AllowedIPs | AllowedPorts | Result |
+|------------|------------|--------------|---------|
+| ✅ Match | ❌ Empty | ❌ Empty | ❌ **Block** |
+| ❌ Empty | ✅ Match | ❌ Empty | ✅ Allow if IP matches |
+| ❌ Empty | ❌ Empty | ✅ Match | ✅ Allow if port matches |
+| ✅ Match | ✅ Match | ❌ Empty | ❌ **Block** (Block wins) |
 
 ### Authentication
 

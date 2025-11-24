@@ -144,6 +144,7 @@ type Config struct {
 	ConnectionLimit int      // Maximum concurrent connections (0 = unlimited)
 	AllowedIPs      []string // List of allowed client IPs (CIDR notation)
 	BlockedIPs      []string // List of blocked client IPs (CIDR notation)
+	AllowedPorts    []int    // List of allowed destination ports (0 = allow all)
 }
 
 // Server represents a SOCKS5 proxy server
@@ -412,6 +413,11 @@ func (s *Server) handleRequest(ctx context.Context, conn net.Conn) error {
 
 	switch command {
 	case connectCommand:
+		// Check if destination port is allowed
+		if !s.isPortAllowed(destPort) {
+			slog.Warn("Destination port not allowed, rejecting connection", "port", destPort, "destination", destAddr)
+			return s.sendReplyError(conn, ErrConnectionRefused)
+		}
 		return s.handleConnect(ctx, conn, destAddr, destPort)
 	case bindCommand:
 		return s.sendReplyError(conn, ErrCommandNotSupported)
@@ -529,6 +535,25 @@ func (s *Server) sendReply(conn net.Conn, replyCode byte, bindIP net.IP, bindPor
 // sendReplyError sends a SOCKS5 reply based on a SOCKS5Error
 func (s *Server) sendReplyError(conn net.Conn, socks5Err *SOCKS5Error) error {
 	return s.sendReply(conn, socks5Err.Code, net.IPv4zero, 0)
+}
+
+// isPortAllowed checks if the given destination port is allowed based on the AllowedPorts configuration
+func (s *Server) isPortAllowed(port int) bool {
+	// If no port filtering is configured, allow all ports
+	if len(s.config.AllowedPorts) == 0 {
+		return true
+	}
+
+	// Check if the port is in the allowed list
+	for _, allowedPort := range s.config.AllowedPorts {
+		if port == allowedPort {
+			slog.Debug("Port allowed", "port", port)
+			return true
+		}
+	}
+
+	slog.Debug("Port denied", "port", port, "allowed_ports", s.config.AllowedPorts)
+	return false
 }
 
 // isClientAllowed checks if the given network address (IP:port) is allowed based on both BlockedIPs and AllowedIPs configuration

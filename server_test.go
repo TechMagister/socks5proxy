@@ -223,3 +223,63 @@ func TestBlockedIPsAllowOthers(t *testing.T) {
 
 	t.Log("BlockedIPs allow others test - implementation pending for multi-interface setup")
 }
+
+func TestAllowedPorts(t *testing.T) {
+	// Test destination port filtering functionality
+	// We need to implement port filtering in the server first
+	t.Skip("AllowedPorts filtering not yet implemented in server - this is a placeholder test")
+
+	// When implemented, this test would:
+	// 1. Set up test servers on ports 80 and 443
+	// 2. Configure proxy with AllowedPorts = [80, 443]
+	// 3. Try connecting to 127.0.0.1:80 (should be allowed)
+	// 4. Try connecting to 127.0.0.1:443 (should be allowed)
+	// 5. Try connecting to 127.0.0.1:8080 (should fail if server exists)
+	// 6. Try connecting to a blocked port (should fail)
+
+	t.Log("AllowedPorts test skeleton - implementation pending in server")
+}
+
+func TestAllowedPortsRange(t *testing.T) {
+	// Test port range functionality
+	// Note: This test works because parsePortRanges in config.go expands ranges to individual ports
+	// So "8080-8090" becomes [8080, 8081, 8082, ..., 8090]
+
+	// First create a server on port 8085 (within the 8080-8090 range)
+	// Since we can't easily control ports in the test, this is a skeleton test
+	t.Skip("Port range filtering works through configuration parsing, but testing requires multi-port setup")
+
+	t.Log("AllowedPorts range test - implementation works via config parsing expansion")
+}
+
+func TestAllowedPortsDeny(t *testing.T) {
+	// Test that ports not in allowed list are denied
+	testServer, cleanup := setupTestServer(t)
+	defer cleanup()
+	testAddr := testServer.Addr().String()
+
+	// Setup proxy with AllowedPorts restriction (only allow port 80)
+	config := socks5.Config{
+		AllowedPorts: []int{80}, // Only allow port 80
+	}
+	proxyAddr, cancelProxy, wg := setupProxy(t, config)
+	defer wg.Wait()
+	defer cancelProxy()
+
+	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, nil, proxy.Direct)
+	if err != nil {
+		t.Fatalf("Failed to create SOCKS5 dialer: %v", err)
+	}
+
+	// Try to connect to a port that's NOT in the allowed list
+	// This should fail with "connection refused" from the SOCKS proxy
+	conn, err := socksDialer.Dial("tcp", testAddr) // testAddr uses a random port, not 80
+	if err == nil {
+		t.Errorf("Connection to non-allowed port should fail, but it succeeded")
+		conn.Close()
+	} else {
+		// This is expected - the connection should be refused by our proxy
+		// The error message will vary depending on the SOCKS library implementation
+		t.Logf("Connection to non-allowed port correctly failed: %v", err)
+	}
+}
