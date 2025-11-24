@@ -3,7 +3,6 @@ package socks5
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -44,6 +43,97 @@ const (
 	// Username/Password Authentication Codes
 	authSuccess = 0
 	authFailure = 1
+)
+
+// SOCKS5-specific errors for better error handling and introspection
+type SOCKS5Error struct {
+	Code    byte
+	Message string
+	Cause   error // Underlying error that caused this SOCKS5 error
+}
+
+func (e *SOCKS5Error) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("%s: %v", e.Message, e.Cause)
+	}
+	return e.Message
+}
+
+// WrapError creates a new SOCKS5Error that wraps an underlying error
+func WrapError(code byte, message string, cause error) *SOCKS5Error {
+	return &SOCKS5Error{
+		Code:    code,
+		Message: message,
+		Cause:   cause,
+	}
+}
+
+// Unwrap returns the underlying cause error
+func (e *SOCKS5Error) Unwrap() error {
+	return e.Cause
+}
+
+// Predefined SOCKS5 error instances
+var (
+	ErrNoAcceptableMethods = &SOCKS5Error{
+		Code:    0xFF,
+		Message: "no acceptable authentication methods",
+	}
+
+	ErrAuthenticationFailed = &SOCKS5Error{
+		Code:    0x01,
+		Message: "authentication failed: invalid credentials",
+	}
+
+	ErrUnsupportedVersion = &SOCKS5Error{
+		Code:    0xFF,
+		Message: "unsupported SOCKS version",
+	}
+
+	ErrNoMethodsProvided = &SOCKS5Error{
+		Code:    0xFF,
+		Message: "no authentication methods provided",
+	}
+
+	ErrCommandNotSupported = &SOCKS5Error{
+		Code:    0x07,
+		Message: "command not supported",
+	}
+
+	ErrAddressTypeNotSupported = &SOCKS5Error{
+		Code:    0x08,
+		Message: "address type not supported",
+	}
+
+	ErrUnsupportedAuthVersion = &SOCKS5Error{
+		Code:    0x01,
+		Message: "unsupported auth version",
+	}
+
+	ErrNetworkUnreachable = &SOCKS5Error{
+		Code:    0x03,
+		Message: "network unreachable",
+	}
+
+	ErrHostUnreachable = &SOCKS5Error{
+		Code:    0x04,
+		Message: "host unreachable",
+	}
+
+	ErrConnectionRefused = &SOCKS5Error{
+		Code:    0x05,
+		Message: "connection refused",
+	}
+
+	ErrTTLExpired = &SOCKS5Error{
+		Code:    0x06,
+		Message: "TTL expired",
+	}
+
+	ErrProtocolError = &SOCKS5Error{
+		Code:    0x01,
+		Message: "general SOCKS server failure",
+	}
 )
 
 // Config holds the server configuration
@@ -131,11 +221,11 @@ func (s *Server) negotiate(conn net.Conn) error {
 	numMethods := header[1]
 
 	if version != socksVersion {
-		return fmt.Errorf("unsupported SOCKS version: %d", version)
+		return ErrUnsupportedVersion
 	}
 
 	if numMethods == 0 {
-		return errors.New("no authentication methods provided")
+		return ErrNoMethodsProvided
 	}
 
 	// Read methods
@@ -147,8 +237,7 @@ func (s *Server) negotiate(conn net.Conn) error {
 	// Select authentication method
 	selectedMethod := s.selectAuthMethod(methods)
 	if selectedMethod == noAcceptableMethods {
-		slog.Warn("No acceptable authentication methods")
-		return errors.New("no acceptable authentication methods")
+		return ErrNoAcceptableMethods
 	}
 
 	// Send method selection response
@@ -208,7 +297,7 @@ func (s *Server) authenticate(conn net.Conn) error {
 		// Send failure response
 		response := []byte{0x01, authFailure}
 		conn.Write(response)
-		return errors.New("unsupported auth version")
+		return ErrUnsupportedAuthVersion
 	}
 
 	// Read username length
@@ -250,7 +339,7 @@ func (s *Server) authenticate(conn net.Conn) error {
 		// Send failure response
 		response := []byte{0x01, authFailure}
 		conn.Write(response)
-		return errors.New("authentication failed: invalid credentials")
+		return ErrAuthenticationFailed
 	}
 }
 
@@ -258,7 +347,7 @@ func (s *Server) handleRequest(ctx context.Context, conn net.Conn) error {
 	// Read request header: version, command, reserved, address type
 	header := make([]byte, 4)
 	if _, err := io.ReadFull(conn, header); err != nil {
-		return fmt.Errorf("failed to read request header: %w", err)
+		return WrapError(replyGeneralFailure, "failed to read request header", err)
 	}
 
 	version := header[0]
@@ -266,7 +355,7 @@ func (s *Server) handleRequest(ctx context.Context, conn net.Conn) error {
 	addressType := header[3]
 
 	if version != socksVersion {
-		return s.sendReply(conn, replyGeneralFailure, net.IPv4zero, 0)
+		return ErrUnsupportedVersion
 	}
 
 	// Read destination address and port
@@ -279,11 +368,11 @@ func (s *Server) handleRequest(ctx context.Context, conn net.Conn) error {
 	case connectCommand:
 		return s.handleConnect(ctx, conn, destAddr, destPort)
 	case bindCommand:
-		return s.sendReply(conn, replyCommandNotSupported, net.IPv4zero, 0)
+		return s.sendReplyError(conn, ErrCommandNotSupported)
 	case udpAssociateCommand:
-		return s.sendReply(conn, replyCommandNotSupported, net.IPv4zero, 0)
+		return s.sendReplyError(conn, ErrCommandNotSupported)
 	default:
-		return s.sendReply(conn, replyCommandNotSupported, net.IPv4zero, 0)
+		return s.sendReplyError(conn, ErrCommandNotSupported)
 	}
 }
 
@@ -350,7 +439,7 @@ func (s *Server) readAddress(conn net.Conn, addressType byte) (string, int, erro
 		destAddr = net.IP(buf).String()
 
 	default:
-		return "", 0, fmt.Errorf("unsupported address type: %d", addressType)
+		return "", 0, ErrAddressTypeNotSupported
 	}
 
 	// Read port
@@ -389,6 +478,11 @@ func (s *Server) sendReply(conn net.Conn, replyCode byte, bindIP net.IP, bindPor
 
 	_, err := conn.Write(reply)
 	return err
+}
+
+// sendReplyError sends a SOCKS5 reply based on a SOCKS5Error
+func (s *Server) sendReplyError(conn net.Conn, socks5Err *SOCKS5Error) error {
+	return s.sendReply(conn, socks5Err.Code, net.IPv4zero, 0)
 }
 
 func (s *Server) forward(ctx context.Context, conn1, conn2 net.Conn) error {

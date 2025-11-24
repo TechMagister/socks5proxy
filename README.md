@@ -120,22 +120,75 @@ type Config struct {
 
 ## Architecture
 
-The server follows Go best practices:
+The server follows modern Go practices with typed errors for enhanced error handling:
 
 - **Server Struct**: Encapsulates configuration and state
 - **Context-Based Cancellation**: Proper shutdown handling
 - **Goroutine-Based Concurrency**: Handles multiple connections concurrently
-- **Error Handling**: Comprehensive error propagation and logging
+- **Typed Errors**: Custom SOCKS5-specific error types for better error introspection
 - **Resource Management**: Proper cleanup of connections
 
 ### Key Components
 
-- `Server`: Main server struct with configuration and logging
-- `negotiate()`: Handles SOCKS5 handshake protocol
-- `handleRequest()`: Processes client requests
-- `handleConnect()`: Implements CONNECT command logic
-- `readAddress()`: Parses SOCKS5 address formats
+- `Server`: Main server struct with configuration
+- `negotiate()`: Handles SOCKS5 handshake protocol with authentication selection
+- `handleRequest()`: Processes client requests with protocol validation
+- `handleConnect()`: Implements CONNECT command with data forwarding
+- `readAddress()`: Parses SOCKS5 address formats with error handling
 - `sendReply()`: Sends replies according to protocol specification
+
+### Typed Errors
+
+The implementation uses custom error types for better error handling and introspection:
+
+```go
+// Predefined SOCKS5 error instances
+var (
+    ErrAuthenticationFailed      // Invalid username/password
+    ErrNoAcceptableMethods       // No negotiation methods accepted
+    ErrUnsupportedVersion        // Wrong SOCKS protocol version
+    ErrAddressTypeNotSupported   // Invalid address type
+    ErrCommandNotSupported       // Unsupported SOCKS command
+    // ... more errors
+)
+```
+
+**Usage with Go 1.13+ error checking:**
+
+```go
+import "errors"
+
+err := socks5.Server.ListenAndServe(ctx)
+if errors.Is(err, socks5.ErrAuthenticationFailed) {
+    // Handle authentication error specifically
+} else if errors.Is(err, socks5.ErrNoAcceptableMethods) {
+    // Handle negotiation failure
+}
+
+// Or unwrap for more details
+var socks5Err *socks5.SOCKS5Error
+if errors.As(err, &socks5Err) {
+    fmt.Printf("Error code: 0x%02x, message: %s", socks5Err.Code, socks5Err.Message)
+}
+```
+
+This enables calling code to handle different error conditions appropriately while maintaining type safety.
+
+### Error Wrapping and Chaining
+
+```go
+// The WrapError function allows wrapping underlying errors with SOCKS5 context
+networkErr := fmt.Errorf("connection timeout")
+socks5Err := socks5.WrapError(socks5.ErrConnectionRefused.Code, "failed to connect to target", networkErr)
+
+// Result: "failed to connect to target: connection timeout"
+fmt.Println(socks5Err.Error())
+
+// Unwrap to access the original error
+if origErr := socks5Err.Unwrap(); origErr != nil {
+    // origErr is "connection timeout"
+}
+```
 
 ## Examples
 
