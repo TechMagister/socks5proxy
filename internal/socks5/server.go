@@ -138,10 +138,11 @@ var (
 
 // Config holds the server configuration
 type Config struct {
-	Addr            string
-	Username        string
-	Password        string
-	ConnectionLimit int // Maximum concurrent connections (0 = unlimited)
+	Addr            string   // Listen address
+	Username        string   // Username for authentication
+	Password        string   // Password for authentication
+	ConnectionLimit int      // Maximum concurrent connections (0 = unlimited)
+	AllowedIPs      []string // List of allowed client IPs (CIDR notation)
 }
 
 // Server represents a SOCKS5 proxy server
@@ -236,6 +237,12 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 		return // Connection limit reached, silently close
 	}
 	defer s.decrementConnections()
+
+	// Check IP filtering
+	if !s.isAllowedIP(conn.RemoteAddr()) {
+		slog.Warn("IP not allowed, rejecting connection", "remote_ip", conn.RemoteAddr().String())
+		return // IP not allowed, silently close
+	}
 
 	if err := s.negotiate(conn); err != nil {
 		slog.Warn("Handshake failed", "error", err)
@@ -521,6 +528,44 @@ func (s *Server) sendReply(conn net.Conn, replyCode byte, bindIP net.IP, bindPor
 // sendReplyError sends a SOCKS5 reply based on a SOCKS5Error
 func (s *Server) sendReplyError(conn net.Conn, socks5Err *SOCKS5Error) error {
 	return s.sendReply(conn, socks5Err.Code, net.IPv4zero, 0)
+}
+
+// isAllowedIP checks if the given network address (IP:port) is allowed based on the AllowedIPs configuration
+func (s *Server) isAllowedIP(addr net.Addr) bool {
+	// If no IP filtering is configured, allow all connections
+	if len(s.config.AllowedIPs) == 0 {
+		return true
+	}
+
+	// Extract IP address from the network address
+	ip, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		slog.Warn("Failed to parse client IP address", "addr", addr.String(), "error", err)
+		return false
+	}
+
+	clientIP := net.ParseIP(ip)
+	if clientIP == nil {
+		slog.Warn("Invalid client IP address", "ip", ip)
+		return false
+	}
+
+	// Check if the client IP is in any of the allowed CIDR ranges
+	for _, cidr := range s.config.AllowedIPs {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			slog.Warn("Invalid CIDR range in allowed IPs", "cidr", cidr, "error", err)
+			continue
+		}
+
+		if network.Contains(clientIP) {
+			slog.Debug("Client IP allowed", "ip", ip, "cidr", cidr)
+			return true
+		}
+	}
+
+	slog.Debug("Client IP denied", "ip", ip, "allowed_cidrs", s.config.AllowedIPs)
+	return false
 }
 
 func (s *Server) forward(ctx context.Context, conn1, conn2 net.Conn) error {
