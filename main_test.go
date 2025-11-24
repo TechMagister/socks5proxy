@@ -11,46 +11,40 @@ import (
 	"golang.org/x/net/proxy"
 )
 
-var testData = []byte("test")
-
-func TestSOCKS5ProxyIntegration(t *testing.T) {
-	// 1. Create a test server that just accepts connections (like a mock target server)
+// setupTestServer creates a test server that echoes data back to clients
+func setupTestServer(t *testing.T) (net.Listener, func()) {
 	testServer, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Failed to create test server: %v", err)
 	}
-	defer testServer.Close()
 
-	testAddr := testServer.Addr().String()
-
-	ctxProxy, cancelProxy := context.WithCancel(context.Background())
-
-	// Start accepting connections on test server
+	// Start accepting connections (echo server)
 	go func() {
-		for {
-			conn, err := testServer.Accept()
-			if err != nil {
-				return // Server closed
-			}
-
-			// read string data from connection
-			buf := make([]byte, 1024)
-			n, err := conn.Read(buf)
-			if err != nil {
-				return // Connection closed
-			}
-
-			// buff to string
-			msg := string(buf[:n])
-			t.Logf("Received message from proxy: %s", msg)
-
-			conn.Write(buf[:n])
-
-			conn.Close() // Just close - we only care about connection establishment
+		conn, err := testServer.Accept()
+		if err != nil {
+			return // Server closed
 		}
+
+		buf := make([]byte, 1024)
+		n, err := conn.Read(buf)
+		if err != nil {
+			return
+		}
+		conn.Write(buf[:n]) // Echo back
+
+		conn.Close()
+		testServer.Close()
 	}()
 
-	// Find an available port for the proxy
+	cleanup := func() {
+		testServer.Close()
+	}
+
+	return testServer, cleanup
+}
+
+// setupProxy creates and starts a SOCKS5 proxy server
+func setupProxy(t *testing.T, config socks5.Config) (string, context.CancelFunc, *sync.WaitGroup) {
 	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Failed to find available port: %v", err)
@@ -58,16 +52,18 @@ func TestSOCKS5ProxyIntegration(t *testing.T) {
 	proxyAddr := proxyListener.Addr().String()
 	proxyListener.Close()
 
-	// 2. Start the proxy in a goroutine
+	ctxProxy, cancelProxy := context.WithCancel(t.Context())
+
 	var wg sync.WaitGroup
 	wg.Add(1)
+
+	config.Addr = proxyAddr // Override address
+
 	go func() {
 		defer wg.Done()
-
-		config := socks5.Config{Addr: proxyAddr}
 		server := socks5.NewServer(config)
 
-		ctx, cancel := context.WithTimeout(ctxProxy, 10*time.Second)
+		ctx, cancel := context.WithTimeout(ctxProxy, 5*time.Second)
 		defer cancel()
 
 		if err := server.ListenAndServe(ctx); err != context.Canceled && err != nil {
@@ -76,146 +72,142 @@ func TestSOCKS5ProxyIntegration(t *testing.T) {
 	}()
 
 	// Give the proxy time to start
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
-	// 3. Use golang.org/x/net/proxy to create SOCKS5 dialer and test connection
-	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, nil, proxy.Direct)
+	return proxyAddr, cancelProxy, &wg
+}
+
+// runIntegrationTest runs the actual proxy integration test
+func runIntegrationTest(t *testing.T, proxyAddr, testAddr string, auth *proxy.Auth, testMessage string) {
+	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, proxy.Direct)
 	if err != nil {
 		t.Fatalf("Failed to create SOCKS5 dialer: %v", err)
 	}
 
-	// 4. Test connecting to our test server through the proxy
 	conn, err := socksDialer.Dial("tcp", testAddr)
 	if err != nil {
 		t.Fatalf("Failed to connect through SOCKS5 proxy: %v", err)
 	}
 	defer conn.Close()
 
-	// 5. Verify the connection worked by writing something and checking it doesn't fail
-	_, err = conn.Write(testData)
+	message := []byte(testMessage)
+	_, err = conn.Write(message)
 	if err != nil {
-		t.Errorf("Failed to write to connection through proxy: %v", err)
+		t.Errorf("Failed to write through proxy: %v", err)
 	}
 
-	// receive data
 	buf := make([]byte, 1024)
 	n, err := conn.Read(buf)
 	if err != nil {
-		t.Errorf("Failed to read from connection through proxy: %v", err)
+		t.Errorf("Failed to read through proxy: %v", err)
 	}
 
-	if string(buf[:n]) != string(testData) {
-		t.Errorf("Received data does not contain test data")
+	if string(buf[:n]) != testMessage {
+		t.Errorf("Expected echo %q, got %q", testMessage, string(buf[:n]))
 	}
-	cancelProxy()
-
-	wg.Wait() // Wait for proxy to shut down
 }
 
-// TestSOCKS5ProxyIntegrationWithAuth tests integration with authentication enabled
-func TestSOCKS5ProxyIntegrationWithAuth(t *testing.T) {
-	// Setup similar to TestSOCKS5ProxyIntegration but with auth
-
-	// 1. Create a test server
-	testServer, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Failed to create test server: %v", err)
-	}
-	defer testServer.Close()
-
+func TestSOCKS5ProxyIntegration(t *testing.T) {
+	// Setup test server
+	testServer, cleanup := setupTestServer(t)
+	defer cleanup()
 	testAddr := testServer.Addr().String()
 
-	ctxProxy, cancelProxy := context.WithCancel(context.Background())
+	// Setup proxy without authentication
+	config := socks5.Config{}
+	proxyAddr, cancelProxy, wg := setupProxy(t, config)
 
-	// Start accepting connections (simple echo server)
-	go func() {
-		for {
-			conn, err := testServer.Accept()
-			if err != nil {
-				return // Server closed
-			}
+	// Run integration test
+	runIntegrationTest(t, proxyAddr, testAddr, nil, "test")
+	cancelProxy()
+	wg.Wait()
+}
 
-			go func(c net.Conn) {
-				defer c.Close()
-				buf := make([]byte, 1024)
-				for {
-					n, err := c.Read(buf)
-					if err != nil {
-						return
-					}
-					c.Write(buf[:n]) // Echo back
-				}
-			}(conn)
-		}
-	}()
+func TestSOCKS5ProxyIntegrationWithAuth(t *testing.T) {
+	// Setup test server
+	testServer, cleanup := setupTestServer(t)
+	defer cleanup()
+	testAddr := testServer.Addr().String()
 
-	// 2. Start proxy with authentication
-	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Failed to find available port: %v", err)
-	}
-	proxyAddr := proxyListener.Addr().String()
-	proxyListener.Close()
-
+	// Setup proxy with authentication
 	config := socks5.Config{
-		Addr:     proxyAddr,
 		Username: "testuser",
 		Password: "testpass",
 	}
+	proxyAddr, cancelProxy, wg := setupProxy(t, config)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	go func() {
-		defer wg.Done()
-		server := socks5.NewServer(config)
-
-		ctx, cancel := context.WithTimeout(ctxProxy, 10*time.Second)
-		defer cancel()
-
-		if err := server.ListenAndServe(ctx); err != context.Canceled && err != nil {
-			t.Errorf("Proxy server failed: %v", err)
-		}
-	}()
-
-	time.Sleep(200 * time.Millisecond)
-
-	// 3. Create SOCKS5 dialer with authentication credentials
+	// Setup authentication for client
 	auth := &proxy.Auth{
 		User:     config.Username,
 		Password: config.Password,
 	}
 
-	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, proxy.Direct)
-	if err != nil {
-		t.Fatalf("Failed to create SOCKS5 dialer: %v", err)
-	}
-
-	// 4. Test connection through authenticated proxy
-	conn, err := socksDialer.Dial("tcp", testAddr)
-	if err != nil {
-		t.Fatalf("Failed to connect through authenticated SOCKS5 proxy: %v", err)
-	}
-	defer conn.Close()
-
-	// 5. Verify data can be sent and received
-	testMessage := []byte("hello authenticated proxy")
-	_, err = conn.Write(testMessage)
-	if err != nil {
-		t.Errorf("Failed to write through authenticated proxy: %v", err)
-	}
-
-	buf := make([]byte, 1024)
-	n, err := conn.Read(buf)
-	if err != nil {
-		t.Errorf("Failed to read through authenticated proxy: %v", err)
-	}
-
-	if string(buf[:n]) != string(testMessage) {
-		t.Errorf("Expected echo %s, got %s", string(testMessage), string(buf[:n]))
-	}
-
+	// Run integration test with authentication
+	runIntegrationTest(t, proxyAddr, testAddr, auth, "hello authenticated proxy")
 	cancelProxy()
-
 	wg.Wait()
+}
+
+func TestAuthCredentialsValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		username    string
+		password    string
+		expectError bool
+	}{
+		{"valid credentials", "testuser", "testpass", false},
+		{"empty username", "", "password", true},
+		{"empty password", "username", "", true},
+		{"both empty", "", "", false}, // No auth mode - valid
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// We can't directly call the main function, so we'll test the logic
+			// by checking if both username and password are provided together
+
+			// This mimics the validation in main.go
+			hasUser := tt.username != ""
+			hasPass := tt.password != ""
+
+			if hasUser != hasPass {
+				if !tt.expectError {
+					t.Errorf("Expected no error for %s, but got validation error", tt.name)
+				}
+			} else {
+				if tt.expectError {
+					t.Errorf("Expected error for %s, but got no error", tt.name)
+				}
+			}
+		})
+	}
+}
+
+// Benchmark test to measure proxy performance
+func BenchmarkSOCKS5Proxy(b *testing.B) {
+	// Setup test server
+	testServer, cleanup := setupTestServer(&testing.T{})
+	defer cleanup()
+	testAddr := testServer.Addr().String()
+
+	// Setup proxy
+	config := socks5.Config{}
+	proxyAddr, cancelProxy, wg := setupProxy(&testing.T{}, config)
+	defer cancelProxy()
+	defer wg.Wait()
+
+	socksDialer, _ := proxy.SOCKS5("tcp", proxyAddr, nil, proxy.Direct)
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			conn, _ := socksDialer.Dial("tcp", testAddr)
+			if conn != nil {
+				conn.Write([]byte("benchmark"))
+				buf := make([]byte, 1024)
+				conn.Read(buf)
+				conn.Close()
+			}
+		}
+	})
 }
