@@ -156,6 +156,12 @@ func (c *Config) loadFromEnv() error {
 }
 
 // parsePortRanges parses port ranges like "80,443,8080-8090"
+// GetExpandedPorts converts a port range string into expanded list of ports
+// This is used for testing port range functionality
+func GetExpandedPorts(portStr string) ([]int, error) {
+	return parsePortRanges(portStr)
+}
+
 func parsePortRanges(portStr string) ([]int, error) {
 	var ports []int
 	ranges := strings.Split(portStr, ",")

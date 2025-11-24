@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/techmagister/socks5proxy/internal/config"
 	"github.com/techmagister/socks5proxy/internal/socks5"
 	"golang.org/x/net/proxy"
 )
@@ -226,30 +227,142 @@ func TestBlockedIPsAllowOthers(t *testing.T) {
 
 func TestAllowedPorts(t *testing.T) {
 	// Test destination port filtering functionality
-	// We need to implement port filtering in the server first
-	t.Skip("AllowedPorts filtering not yet implemented in server - this is a placeholder test")
+	testServer, cleanup := setupTestServer(t)
+	defer cleanup()
+	testAddr := testServer.Addr().String()
 
-	// When implemented, this test would:
-	// 1. Set up test servers on ports 80 and 443
-	// 2. Configure proxy with AllowedPorts = [80, 443]
-	// 3. Try connecting to 127.0.0.1:80 (should be allowed)
-	// 4. Try connecting to 127.0.0.1:443 (should be allowed)
-	// 5. Try connecting to 127.0.0.1:8080 (should fail if server exists)
-	// 6. Try connecting to a blocked port (should fail)
+	// Setup proxy with AllowedPorts restriction (only allow ports 80 and 443)
+	socks5Config := socks5.Config{
+		AllowedPorts: []int{80, 443}, // Only allow ports 80 (HTTP) and 443 (HTTPS)
+	}
+	proxyAddr, cancelProxy, wg := setupProxy(t, socks5Config)
+	defer wg.Wait()
+	defer cancelProxy()
 
-	t.Log("AllowedPorts test skeleton - implementation pending in server")
+	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, nil, proxy.Direct)
+	if err != nil {
+		t.Fatalf("Failed to create SOCKS5 dialer: %v", err)
+	}
+
+	// Test connections to known ports:
+	// Try connecting to our test server (which uses a random port) - this should fail
+	conn, err := socksDialer.Dial("tcp", testAddr)
+	if err == nil {
+		t.Errorf("Connection to port %s should fail (not in allowed ports 80,443), but it succeeded", testAddr)
+		conn.Close()
+	} else {
+		// This is expected - the connection should be refused by our proxy
+		t.Logf("Connection to non-allowed port correctly failed: %v", err)
+	}
+
+	// Note: Testing connections to actual port 80/443 would require external internet access
+	// or setting up local test servers on those specific ports, which is complex in a unit test
+	// For now, we verify that our test port (random) is correctly rejected
+
+	// Test with a different configuration - allow all ports (empty AllowedPorts)
+	configEmpty := socks5.Config{
+		AllowedPorts: []int{}, // Empty = allow all ports
+	}
+	proxyAddrEmpty, cancelProxyEmpty, wgEmpty := setupProxy(t, configEmpty)
+	defer wgEmpty.Wait()
+	defer cancelProxyEmpty()
+
+	socksDialerEmpty, err := proxy.SOCKS5("tcp", proxyAddrEmpty, nil, proxy.Direct)
+	if err != nil {
+		t.Fatalf("Failed to create SOCKS5 dialer: %v", err)
+	}
+
+	// Now connection should succeed since no port restrictions
+	connEmpty, errEmpty := socksDialerEmpty.Dial("tcp", testAddr)
+	if errEmpty != nil {
+		t.Errorf("Connection should succeed with no port restrictions, but failed: %v", errEmpty)
+	} else {
+		connEmpty.Close()
+		t.Logf("Connection succeeded with no port restrictions")
+	}
 }
 
 func TestAllowedPortsRange(t *testing.T) {
-	// Test port range functionality
-	// Note: This test works because parsePortRanges in config.go expands ranges to individual ports
-	// So "8080-8090" becomes [8080, 8081, 8082, ..., 8090]
+	// Test port range functionality using the configuration parsing
 
-	// First create a server on port 8085 (within the 8080-8090 range)
-	// Since we can't easily control ports in the test, this is a skeleton test
-	t.Skip("Port range filtering works through configuration parsing, but testing requires multi-port setup")
+	// Test the port range expansion directly first
+	expandedPorts, err := config.GetExpandedPorts("8080-8090,80,443")
+	if err != nil {
+		t.Fatalf("Failed to expand port ranges: %v", err)
+	}
 
-	t.Log("AllowedPorts range test - implementation works via config parsing expansion")
+	// Verify the expansion worked correctly
+	expectedLength := 1 + 1 + (8090 - 8080 + 1) // 80, 443, and the range 8080-8090 inclusive
+	if len(expandedPorts) != expectedLength {
+		t.Errorf("Expected %d ports, got %d", expectedLength, len(expandedPorts))
+	}
+
+	// Check some specific ports are included
+	expectedPorts := []int{80, 443, 8080, 8085, 8090}
+	for _, port := range expectedPorts {
+		found := false
+		for _, expandedPort := range expandedPorts {
+			if expandedPort == port {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected port %d to be in expanded list, but it was not found", port)
+		}
+	}
+
+	t.Logf("Port range expansion successful: %d ports expanded from '8080-8090,80,443'", len(expandedPorts))
+
+	// Now test integration with SOCKS5 server
+	testServer, cleanup := setupTestServer(t)
+	defer cleanup()
+	testAddr := testServer.Addr().String()
+
+	// Create SOCKS5 config with expanded port ranges (similar to what would happen from env var)
+	config := socks5.Config{
+		AllowedPorts: expandedPorts, // All expanded ports including 8085 which should work
+	}
+	proxyAddr, cancelProxy, wg := setupProxy(t, config)
+	defer wg.Wait()
+	defer cancelProxy()
+
+	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, nil, proxy.Direct)
+	if err != nil {
+		t.Fatalf("Failed to create SOCKS5 dialer: %v", err)
+	}
+
+	// Test that a different port (outside the allowed range) gets rejected
+	conn, err := socksDialer.Dial("tcp", testAddr) // This should fail since testAddr port is not in our expanded range
+	if err == nil {
+		t.Errorf("Connection to port %s should fail (not in expanded port range), but it succeeded", testAddr)
+		conn.Close()
+	} else {
+		// This is expected - the connection should be refused by our proxy
+		t.Logf("Connection to non-allowed port correctly failed: %v", err)
+	}
+
+	// Create a proxy with empty ports (allow all) to verify the negative case works
+	configEmpty := socks5.Config{
+		AllowedPorts: []int{}, // Empty = allow all ports
+	}
+	proxyAddrEmpty, cancelProxyEmpty, wgEmpty := setupProxy(t, configEmpty)
+	defer wgEmpty.Wait()
+	defer cancelProxyEmpty()
+
+	socksDialerEmpty, err := proxy.SOCKS5("tcp", proxyAddrEmpty, nil, proxy.Direct)
+	if err != nil {
+		t.Fatalf("Failed to create SOCKS5 dialer: %v", err)
+	}
+
+	// Now the connection should succeed
+	connEmpty, errEmpty := socksDialerEmpty.Dial("tcp", testAddr)
+	if errEmpty != nil {
+		t.Errorf("Connection should succeed with no port restrictions, but failed: %v", errEmpty)
+	} else {
+		connEmpty.Close()
+		t.Logf("Connection succeeded when no port restrictions applied")
+	}
 }
 
 func TestAllowedPortsDeny(t *testing.T) {
