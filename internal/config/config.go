@@ -26,8 +26,10 @@ type Config struct {
 	LogFormat string `json:"log_format" yaml:"log_format" env:"SOCKS5_LOG_FORMAT"`
 
 	// Performance
-	MaxConnections int `json:"max_connections" yaml:"max_connections" env:"SOCKS5_MAX_CONNECTIONS"`
-	Timeout        int `json:"timeout" yaml:"timeout" env:"SOCKS5_TIMEOUT"`
+	Timeout int `json:"timeout" yaml:"timeout" env:"SOCKS5_TIMEOUT"`
+
+	// Connection limiting (0 = unlimited)
+	ConnectionLimit int `json:"connection_limit" yaml:"connection_limit" env:"SOCKS5_CONNECTION_LIMIT"`
 
 	// Advanced options
 	AllowedIPs   []string `json:"allowed_ips,omitempty" yaml:"allowed_ips,omitempty"`
@@ -39,13 +41,12 @@ type Config struct {
 // DefaultConfig returns a configuration with sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
-		Addr:           ":1080",
-		ListenIP:       "0.0.0.0",
-		Port:           1080,
-		LogLevel:       "info",
-		LogFormat:      "json",
-		MaxConnections: 1000,
-		Timeout:        30,
+		Addr:      ":1080",
+		ListenIP:  "0.0.0.0",
+		Port:      1080,
+		LogLevel:  "info",
+		LogFormat: "json",
+		Timeout:   30,
 	}
 }
 
@@ -121,11 +122,13 @@ func (c *Config) loadFromEnv() error {
 		c.LogFormat = logFormat
 	}
 
-	if maxConn, err := getEnvInt("SOCKS5_MAX_CONNECTIONS", c.MaxConnections); err == nil {
-		c.MaxConnections = maxConn
-	}
 	if timeout, err := getEnvInt("SOCKS5_TIMEOUT", c.Timeout); err == nil {
 		c.Timeout = timeout
+	}
+
+	// Load connection limit
+	if connLimit, err := getEnvInt("SOCKS5_CONNECTION_LIMIT", 0); err == nil {
+		c.ConnectionLimit = connLimit
 	}
 
 	// Load slice values from environment
@@ -197,10 +200,6 @@ func (c *Config) Validate() error {
 
 	if c.Timeout < 1 {
 		return fmt.Errorf("timeout must be positive, got %d", c.Timeout)
-	}
-
-	if c.MaxConnections < 1 {
-		return fmt.Errorf("max_connections must be positive, got %d", c.MaxConnections)
 	}
 
 	// Validate log level

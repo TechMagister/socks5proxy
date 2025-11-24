@@ -67,8 +67,8 @@ username: "testuser"
 password: "testpass"
 log_level: "info"
 log_format: "text"
-max_connections: 1000
 timeout: 30
+connection_limit: 100  # 0 = unlimited
 allowed_ips:
   - "192.168.1.0/24"
   - "10.0.0.0/8"

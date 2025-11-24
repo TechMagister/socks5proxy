@@ -138,20 +138,25 @@ var (
 
 // Config holds the server configuration
 type Config struct {
-	Addr     string
-	Username string
-	Password string
+	Addr            string
+	Username        string
+	Password        string
+	ConnectionLimit int // Maximum concurrent connections (0 = unlimited)
 }
 
 // Server represents a SOCKS5 proxy server
 type Server struct {
-	config Config
+	config       Config
+	connections  int64        // Current active connection count
+	maxConnMutex sync.RWMutex // Protects connections counter
+	connLimit    int64        // Maximum allowed connections (0 = unlimited)
 }
 
 // NewServer creates a new SOCKS5 server instance
 func NewServer(config Config) *Server {
 	return &Server{
-		config: config,
+		config:    config,
+		connLimit: int64(config.ConnectionLimit),
 	}
 }
 
@@ -194,10 +199,43 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	return nil
 }
 
+// incrementConnections increments the active connection counter
+func (s *Server) incrementConnections() bool {
+	s.maxConnMutex.Lock()
+	defer s.maxConnMutex.Unlock()
+
+	// Check if we've reached the connection limit
+	if s.connLimit > 0 && s.connections >= s.connLimit {
+		return false // Limit reached
+	}
+
+	s.connections++
+	slog.Debug("Connection count increased", "count", s.connections, "limit", s.connLimit)
+	return true
+}
+
+// decrementConnections decrements the active connection counter
+func (s *Server) decrementConnections() {
+	s.maxConnMutex.Lock()
+	defer s.maxConnMutex.Unlock()
+
+	if s.connections > 0 {
+		s.connections--
+		slog.Debug("Connection count decreased", "count", s.connections)
+	}
+}
+
 func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 
 	slog.Debug("New connection", "remote_addr", conn.RemoteAddr().String())
+
+	// Check connection limit before proceeding
+	if !s.incrementConnections() {
+		slog.Warn("Connection limit reached, rejecting connection", "limit", s.connLimit)
+		return // Connection limit reached, silently close
+	}
+	defer s.decrementConnections()
 
 	if err := s.negotiate(conn); err != nil {
 		slog.Warn("Handshake failed", "error", err)

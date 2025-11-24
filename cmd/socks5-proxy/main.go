@@ -96,9 +96,10 @@ func runServer(cmd *cobra.Command, args []string) error {
 	slog.Info("Starting SOCKS5 proxy server", "config", cfg.String())
 
 	server := socks5.NewServer(socks5.Config{
-		Addr:     cfg.GetAddress(),
-		Username: cfg.Username,
-		Password: cfg.Password,
+		Addr:            cfg.GetAddress(),
+		Username:        cfg.Username,
+		Password:        cfg.Password,
+		ConnectionLimit: cfg.ConnectionLimit,
 	})
 
 	sigChan := make(chan os.Signal, 1)
